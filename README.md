@@ -140,13 +140,15 @@ cd server-go
 go test ./... -v
 ```
 
-預期 ~1.2 秒跑完 12 個測試全綠：
+預期 ~1.5 秒跑完 26 個測試全綠：
 
 | 類別 | 檔案 | 測試 |
 |---|---|---|
 | **連線與正確性** | [connection_test.go](server-go/connection_test.go) | `TestConnect_NoToken_Rejected` · `TestConnect_ExpiredToken_Rejected` · `TestConnect_ValidToken_Accepted` · `TestEvent_Welcome_PayloadShape` · `TestEvent_PingAck_RoundTrip` · `TestEvent_ChatBroadcast_BetweenTwoClients` · `TestEvent_RoomScoped_OnlyMembersReceive` |
+| **`/admin` namespace** | [admin_test.go](server-go/admin_test.go) | `TestAdmin_NoToken_Rejected` · `TestAdmin_ValidToken_Accepted_AnyRole` (驗證 JWT-only) · `TestAdmin_Welcome_PayloadShape` · `TestAdmin_OpAck_RoundTrip` |
+| **JWT 進階** | [auth_test.go](server-go/auth_test.go) | `TestAuth_QueryToken_Accepted` · `TestAuth_AuthorizationHeader_Accepted` · `TestAuth_AuthorizationHeader_CaseInsensitiveAndMultiSpace` (6 個 sub-tests) · `TestAuth_AuthBeatsQuery` · `TestAuth_QueryBeatsHeader` · `TestAuth_AlgNone_Rejected` · `TestAuth_AlgRS256_Rejected` · `TestAuth_ManualToken_ParsesAsClaimedAlg` |
 | **多連線壓力** | [stress_test.go](server-go/stress_test.go) | `TestStress_ManyConcurrentConnects` (預設 50 並發) · `TestStress_BroadcastFanout` (20 client 同時收 broadcast) |
-| **大量資料** | [payload_test.go](server-go/payload_test.go) | `TestPayload_LargeAckRoundTrip` (1 MiB 單次 + SHA-256 驗證) · `TestPayload_BurstManyMessages` (500 連續 ack) · `TestPayload_ConcurrentLargePayloads` (5 client × 256 KiB) |
+| **大量資料** | [payload_test.go](server-go/payload_test.go) | `TestPayload_LargeAckRoundTrip` (1 MiB 單次 + SHA-256) · `TestPayload_BurstManyMessages` (500 連續 ack) · `TestPayload_ConcurrentLargePayloads` (5 client × 256 KiB) · `TestPayload_NearMaxBuffer` (8 MiB - 4 KiB) · `TestPayload_OverMaxBuffer` (9 MiB 應被拒) |
 
 ### 加壓跑
 

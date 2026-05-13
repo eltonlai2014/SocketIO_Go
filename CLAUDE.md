@@ -165,6 +165,6 @@ Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling �
 8. **新功能流程**：先在 Node server 加事件 → 同步到 Go server → 同步 README 事件表格 → 在 Go client 對應 `On/Emit` → 兩個 server 各跑一次驗證。
 9. **JWT secret 不要 commit**：`JWT_SECRET` 只能用環境變數注入；dev 預設值 `dev-secret-change-me` 已在程式碼中明示「change me」，production 必須覆寫。
 10. **改 JWT 邏輯時兩邊同步**：Node 的 `jwtMiddleware` 與 Go 的 `auth.go` 必須行為等價（token 抽取順序、錯誤碼、claims schema）。檢查表見上方「兩端等價檢查」。
-11. **改 server 行為前先跑 `go test ./...`**：12 個測試覆蓋 auth、事件正確性、並發、大 payload。新增事件時請順手在 `connection_test.go` 補一個對應的測試。
+11. **改 server 行為前先跑 `go test ./...`**：26 個測試覆蓋 auth gate、token 三來源、wrong-alg、事件正確性、`/admin` namespace、並發、大 payload（含 8 MiB 邊界）。新增事件時請順手在 `connection_test.go` 或對應主題的測試檔補一個對應的測試。
 12. **註冊 listener 要趕在 connect 之前**：Engine.IO 的事件（welcome、connect 之後 server 主動 emit 的訊息）可能在 client 端 `connect` 回呼觸發前就送達。測試 helper `dial()` 不等 connect、`mustDial()` 等 connect——大部分情境用 `dial()` 後立刻 `On(...)` 才不會錯過第一個 packet。
 13. **`MaxHttpBufferSize` 已從預設 1 MiB 拉到 8 MiB**（[app.go](server-go/app.go)），這是大 payload 測試的前提；若要再放大需同步調整測試上限與守則此條。

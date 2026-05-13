@@ -29,7 +29,7 @@
 | 元件 | 路徑 | 角色 |
 |---|---|---|
 | Node Socket.IO server | [server/](server/) | 參考實作（reference impl），含 JWT |
-| Go Socket.IO server | [server-go/](server-go/) | 等價的 Go 版，含 JWT + 12 個測試 |
+| Go Socket.IO server | [server-go/](server-go/) | 等價的 Go 版，含 JWT + 26 個測試（含 `/admin`、token 三來源、wrong-alg、8 MiB 邊界） |
 | Go client | [client/](client/) | 同一份 client 可打兩邊 server |
 
 **核心不變條件**（review 必須對著這些檢查）：
