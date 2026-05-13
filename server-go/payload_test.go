@@ -182,6 +182,98 @@ func TestPayload_ConcurrentLargePayloads(t *testing.T) {
 		float64(totalBytes)/time.Since(start).Seconds()/(1024*1024))
 }
 
+// --- MaxHttpBufferSize boundary -------------------------------------------
+// server-go/app.go sets MaxHttpBufferSize to 8 MiB. These tests pin the
+// contract: payloads just under that round-trip; payloads clearly over do not.
+
+// TestPayload_NearMaxBuffer verifies a payload just under the 8 MiB limit
+// round-trips. A small envelope margin is left for engine.io + socket.io
+// framing overhead so the test isn't sensitive to encoder details.
+func TestPayload_NearMaxBuffer(t *testing.T) {
+	tok := mustToken(t, "alice", "user", time.Hour)
+	sock := mustDial(t, tok)
+
+	const size = 8*1024*1024 - 4096 // 8 MiB - 4 KiB margin
+	body := strings.Repeat("X", size)
+	wantHash := sha256.Sum256([]byte(body))
+
+	type ackResult struct {
+		args []any
+		err  error
+	}
+	ch := make(chan ackResult, 1)
+
+	start := time.Now()
+	sock.EmitWithAck("ping", body)(func(args []any, err error) {
+		ch <- ackResult{args, err}
+	})
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Fatalf("ack error at %d B: %v", size, r.err)
+		}
+		m, ok := r.args[0].(map[string]any)
+		if !ok {
+			t.Fatalf("ack payload not a map: %T", r.args[0])
+		}
+		echo, ok := m["echo"].(string)
+		if !ok {
+			t.Fatalf("ack.echo not a string: %T", m["echo"])
+		}
+		if len(echo) != size {
+			t.Fatalf("echo length: got %d, want %d", len(echo), size)
+		}
+		if sha256.Sum256([]byte(echo)) != wantHash {
+			t.Fatal("near-max payload hash mismatch")
+		}
+		t.Logf("near-max %d B round-trip in %s", size, time.Since(start))
+	case <-time.After(30 * time.Second):
+		t.Fatalf("near-max (%d B) ack timeout", size)
+	}
+}
+
+// TestPayload_OverMaxBuffer sends 9 MiB — clearly over the 8 MiB limit — and
+// asserts the server does not produce a successful echo. Acceptable outcomes:
+//   1) ack callback never fires within timeout
+//   2) ack callback fires with err != nil (transport rejected / closed)
+// Failure: ack returns intact 9 MiB echo (means MaxHttpBufferSize is not in effect).
+func TestPayload_OverMaxBuffer(t *testing.T) {
+	tok := mustToken(t, "alice", "user", time.Hour)
+	sock := mustDial(t, tok)
+
+	const size = 9 * 1024 * 1024 // 9 MiB, well over the 8 MiB cap
+	body := strings.Repeat("X", size)
+
+	type ackResult struct {
+		args []any
+		err  error
+	}
+	ch := make(chan ackResult, 1)
+	sock.EmitWithAck("ping", body)(func(args []any, err error) {
+		ch <- ackResult{args, err}
+	})
+
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			t.Logf("expected rejection: ack returned err: %v", r.err)
+			return
+		}
+		// ack succeeded — inspect what came back
+		m, _ := r.args[0].(map[string]any)
+		echo, _ := m["echo"].(string)
+		if len(echo) == size {
+			t.Fatalf("9 MiB payload unexpectedly round-tripped intact — MaxHttpBufferSize=%d not enforced",
+				8*1024*1024)
+		}
+		t.Logf("expected rejection: ack returned truncated echo (len=%d)", len(echo))
+	case <-time.After(8 * time.Second):
+		// expected: no ack
+		t.Log("expected rejection: no ack within timeout")
+	}
+}
+
 type returnedSock struct {
 	sock interface {
 		EmitWithAck(string, ...any) func(func([]any, error))

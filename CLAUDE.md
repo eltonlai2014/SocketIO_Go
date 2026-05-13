@@ -130,7 +130,9 @@ Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling �
 ### 設計決策
 - **演算法**：HS256（共享 secret）— dev 階段最簡單；要換 RS256 改 `auth.go` 的 `verifyJWT` keyfunc 即可。
 - **Token 位置**：`socket.handshake.auth.token`（推薦）→ `query.token` → `Authorization: Bearer ...` 三來源都接受。client 用 `opts.SetAuth(...)` 走第一個。
+- **`Bearer` 解析**：Node `replace(/^Bearer\s+/i, "")`；Go `regexp.MustCompile(`(?i)^Bearer\s+`).ReplaceAllString(...)`。兩邊都是**大小寫不敏感 + 允許多空白**——任何修改都要兩邊同步。
 - **驗證點**：Namespace `Use()` middleware，**不是** Gin middleware。原因：Gin 看不到 Socket.IO CONNECT packet 內的 auth payload，且只看得到 polling 階段的 HTTP 握手。
+- **`/admin` 授權政策**：**JWT-only**——任何有效的 HS256 token 都能進。`role` claim 目前**不參與授權**（只是日誌資訊）。若未來要 role-based gating，需重新在 `/admin` 掛 role middleware 並同步 Node 端。
 - **Secret 管理**：`JWT_SECRET` 環境變數；不設則用 `dev-secret-change-me`（Node、Go server、make-token 三邊一致）。
 - **Claims**：自訂結構 `Claims{UserID, Role, RegisteredClaims}`，存在 `socket.Data()`（Go）/ `socket.data.claims`（Node）。
 - **錯誤回傳**：`socket.NewExtendedError("unauthorized", {code:"AUTH_FAILED", reason:"..."})`，client 在 `connect_error` 事件收到。

@@ -88,23 +88,6 @@ func jwtMiddleware(nsp string) func(*socket.Socket, func(*socket.ExtendedError))
 	}
 }
 
-// requireRole returns a middleware that rejects unless the socket's claims have
-// the given role. Must run AFTER jwtMiddleware on the same namespace.
-func requireRole(nsp, role string) func(*socket.Socket, func(*socket.ExtendedError)) {
-	return func(client *socket.Socket, next func(*socket.ExtendedError)) {
-		claims, _ := client.Data().(*Claims)
-		if claims == nil || claims.Role != role {
-			log.Printf("[%s] role reject sid=%s want=%s got=%v", nsp, client.Id(), role, claims)
-			next(socket.NewExtendedError("forbidden", map[string]any{
-				"code":     "ROLE_REQUIRED",
-				"required": role,
-			}))
-			return
-		}
-		next(nil)
-	}
-}
-
 // signTokenForDev is used by the make-token CLI; placed here so the secret
 // resolution stays in one file.
 func signTokenForDev(userID, role string, ttl time.Duration) (string, error) {

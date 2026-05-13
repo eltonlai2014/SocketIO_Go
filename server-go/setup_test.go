@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"testing"
@@ -95,6 +97,133 @@ func mustDial(t testing.TB, token string) *clientsocket.Socket {
 	if err != nil {
 		t.Fatalf("mustDial: %v", err)
 	}
+	return sock
+}
+
+// waitForConnect blocks until either "connect" or "connect_error" fires.
+// Returns nil if connected, error from connect_error, or timeout error.
+// Caller must register this BEFORE expecting connect to complete (use after dial*).
+func waitForConnect(t testing.TB, sock *clientsocket.Socket, timeout time.Duration) error {
+	t.Helper()
+	connected := make(chan struct{})
+	errCh := make(chan error, 1)
+	var once sync.Once
+	sock.On("connect", func(...any) { once.Do(func() { close(connected) }) })
+	sock.On("connect_error", func(args ...any) {
+		select {
+		case errCh <- fmt.Errorf("connect_error: %v", args):
+		default:
+		}
+	})
+	select {
+	case <-connected:
+		return nil
+	case err := <-errCh:
+		return err
+	case <-time.After(timeout):
+		return fmt.Errorf("timeout waiting for connect after %s", timeout)
+	}
+}
+
+// dialAdmin dials the /admin namespace with the given token in auth payload.
+// Returns an unconnected socket; use waitForConnect on it.
+func dialAdmin(t testing.TB, token string) *clientsocket.Socket {
+	t.Helper()
+	opts := clientsocket.DefaultOptions()
+	opts.SetTransports(enginetypes.NewSet(clienttransports.Polling, clienttransports.WebSocket))
+	if token != "" {
+		opts.SetAuth(map[string]any{"token": token})
+	}
+	sock, err := clientsocket.Connect(testURL+"admin", opts)
+	if err != nil {
+		t.Fatalf("connect /admin: %v", err)
+	}
+	t.Cleanup(func() {
+		sock.Disconnect()
+		sock.Close()
+	})
+	return sock
+}
+
+// dialWithQuery sends the token via query string only (no auth payload, no header).
+func dialWithQuery(t testing.TB, token string) *clientsocket.Socket {
+	t.Helper()
+	opts := clientsocket.DefaultOptions()
+	opts.SetTransports(enginetypes.NewSet(clienttransports.Polling, clienttransports.WebSocket))
+	if token != "" {
+		q := url.Values{}
+		q.Set("token", token)
+		opts.SetQuery(q)
+	}
+	sock, err := clientsocket.Connect(testURL, opts)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() {
+		sock.Disconnect()
+		sock.Close()
+	})
+	return sock
+}
+
+// dialWithHeader sends a raw Authorization header (caller provides full value
+// including "Bearer " prefix or variants for parser testing).
+func dialWithHeader(t testing.TB, authorizationValue string) *clientsocket.Socket {
+	t.Helper()
+	opts := clientsocket.DefaultOptions()
+	opts.SetTransports(enginetypes.NewSet(clienttransports.Polling, clienttransports.WebSocket))
+	if authorizationValue != "" {
+		h := http.Header{}
+		h.Set("Authorization", authorizationValue)
+		opts.SetExtraHeaders(h)
+	}
+	sock, err := clientsocket.Connect(testURL, opts)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() {
+		sock.Disconnect()
+		sock.Close()
+	})
+	return sock
+}
+
+// makeDualSourceOpts builds opts that may set token in any combination of
+// auth payload, query string, and Authorization header. Empty string skips
+// that source.
+func makeDualSourceOpts(t testing.TB, authTok, queryTok, headerVal string) *clientsocket.Options {
+	t.Helper()
+	opts := clientsocket.DefaultOptions()
+	opts.SetTransports(enginetypes.NewSet(clienttransports.Polling, clienttransports.WebSocket))
+	if authTok != "" {
+		opts.SetAuth(map[string]any{"token": authTok})
+	}
+	if queryTok != "" {
+		q := url.Values{}
+		q.Set("token", queryTok)
+		opts.SetQuery(q)
+	}
+	if headerVal != "" {
+		h := http.Header{}
+		h.Set("Authorization", headerVal)
+		opts.SetExtraHeaders(h)
+	}
+	return opts
+}
+
+// connectAndCleanup dials the given URL with preconfigured opts and registers
+// disconnect cleanup. Used when the caller needs to set up unusual opts (e.g.
+// multiple token sources for precedence tests).
+func connectAndCleanup(t testing.TB, dialURL string, opts *clientsocket.Options) *clientsocket.Socket {
+	t.Helper()
+	sock, err := clientsocket.Connect(dialURL, opts)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	t.Cleanup(func() {
+		sock.Disconnect()
+		sock.Close()
+	})
 	return sock
 }
 
