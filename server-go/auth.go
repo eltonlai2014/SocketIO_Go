@@ -4,12 +4,16 @@ import (
 	"errors"
 	"log"
 	"os"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/zishang520/socket.io/v2/socket"
 )
+
+// bearerPrefix matches Node's `replace(/^Bearer\s+/i, "")`: case-insensitive,
+// one-or-more whitespace, anchored at start.
+var bearerPrefix = regexp.MustCompile(`(?i)^Bearer\s+`)
 
 // Default dev secret — DO NOT use in production. Override with JWT_SECRET env.
 const defaultSecret = "dev-secret-change-me"
@@ -59,7 +63,7 @@ func extractToken(auth any, query map[string][]string, headers map[string][]stri
 		return v[0]
 	}
 	if v := headers["Authorization"]; len(v) > 0 {
-		return strings.TrimPrefix(v[0], "Bearer ")
+		return bearerPrefix.ReplaceAllString(v[0], "")
 	}
 	return ""
 }

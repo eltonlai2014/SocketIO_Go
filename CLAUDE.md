@@ -92,7 +92,7 @@ go run .
 | `welcome` | server → client | `{ ns, id }` |
 | `op` | client → server | `any` + ack → `{ ok: true }` |
 
-Go 端切換 namespace：把 `manager.Socket("/", nil)` 改成 `manager.Socket("/admin", nil)` 即可。
+Go 端切換 namespace：把 [client/main.go:31](client/main.go#L31) 的 `socket.Connect(serverURL, opts)` 改成 `socket.Connect(serverURL+"admin", opts)`（`serverURL` 已含尾斜線）。
 
 ---
 
