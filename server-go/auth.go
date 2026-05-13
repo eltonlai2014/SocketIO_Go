@@ -4,12 +4,16 @@ import (
 	"errors"
 	"log"
 	"os"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/zishang520/socket.io/v2/socket"
 )
+
+// bearerPrefix matches Node's `replace(/^Bearer\s+/i, "")`: case-insensitive,
+// one-or-more whitespace, anchored at start.
+var bearerPrefix = regexp.MustCompile(`(?i)^Bearer\s+`)
 
 // Default dev secret — DO NOT use in production. Override with JWT_SECRET env.
 const defaultSecret = "dev-secret-change-me"
@@ -59,7 +63,7 @@ func extractToken(auth any, query map[string][]string, headers map[string][]stri
 		return v[0]
 	}
 	if v := headers["Authorization"]; len(v) > 0 {
-		return strings.TrimPrefix(v[0], "Bearer ")
+		return bearerPrefix.ReplaceAllString(v[0], "")
 	}
 	return ""
 }
@@ -80,23 +84,6 @@ func jwtMiddleware(nsp string) func(*socket.Socket, func(*socket.ExtendedError))
 			return
 		}
 		client.SetData(claims)
-		next(nil)
-	}
-}
-
-// requireRole returns a middleware that rejects unless the socket's claims have
-// the given role. Must run AFTER jwtMiddleware on the same namespace.
-func requireRole(nsp, role string) func(*socket.Socket, func(*socket.ExtendedError)) {
-	return func(client *socket.Socket, next func(*socket.ExtendedError)) {
-		claims, _ := client.Data().(*Claims)
-		if claims == nil || claims.Role != role {
-			log.Printf("[%s] role reject sid=%s want=%s got=%v", nsp, client.Id(), role, claims)
-			next(socket.NewExtendedError("forbidden", map[string]any{
-				"code":     "ROLE_REQUIRED",
-				"required": role,
-			}))
-			return
-		}
 		next(nil)
 	}
 }

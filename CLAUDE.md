@@ -66,7 +66,7 @@ npm start
 
 ```powershell
 cd client
-go mod tidy        # 第一次需要拉取依賴
+go mod download    # 第一次依鎖定版本拉取依賴；不會修改 go.mod / go.sum
 go run .
 ```
 
@@ -92,19 +92,25 @@ go run .
 | `welcome` | server → client | `{ ns, id }` |
 | `op` | client → server | `any` + ack → `{ ok: true }` |
 
-Go 端切換 namespace：把 `manager.Socket("/", nil)` 改成 `manager.Socket("/admin", nil)` 即可。
+Go 端切換 namespace：把 [client/main.go:31](client/main.go#L31) 的 `socket.Connect(serverURL, opts)` 改成 `socket.Connect(serverURL+"admin", opts)`（`serverURL` 已含尾斜線）。
 
 ---
 
 ## 常見問題
 
-### Q1：`go mod tidy` 失敗或找不到套件
+### Q1：依賴下載失敗 / 找不到套件
 注意 import 路徑沒有 `/v3` 字尾（v1.x 上仍以 `github.com/zishang520/socket.io-client-go/socket` 為準），且需要 Go ≥ 1.24.1。
+
+**正確修法**：先確認 `go.sum` 與 `go.mod` 已有鎖定版本（這個 repo 提交時就是齊全的），然後跑：
 ```powershell
-go get github.com/zishang520/socket.io-client-go@latest
-go get github.com/zishang520/engine.io-client-go@latest
-go get github.com/zishang520/engine.io/v2@latest
+go mod download
 ```
+這只會依 `go.sum` 把鎖定版本拉到 module cache，**不會**改 `go.mod` / `go.sum`。
+
+**禁忌**（任一條都會破壞版本鎖、引發守則第 7 條的編譯衝突）：
+- ❌ `go mod tidy`（會自動升級可升的 indirect deps）
+- ❌ `go get <package>@latest`（會把 `quic-go` / `qpack` / `gin` 升過上限）
+- ❌ `go get -u`（升級所有依賴）
 
 ### Q2：客戶端連不上、卡在 polling
 Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling 再 upgrade 到 WS。確認：
@@ -124,7 +130,9 @@ Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling �
 ### 設計決策
 - **演算法**：HS256（共享 secret）— dev 階段最簡單；要換 RS256 改 `auth.go` 的 `verifyJWT` keyfunc 即可。
 - **Token 位置**：`socket.handshake.auth.token`（推薦）→ `query.token` → `Authorization: Bearer ...` 三來源都接受。client 用 `opts.SetAuth(...)` 走第一個。
+- **`Bearer` 解析**：Node `replace(/^Bearer\s+/i, "")`；Go `regexp.MustCompile(`(?i)^Bearer\s+`).ReplaceAllString(...)`。兩邊都是**大小寫不敏感 + 允許多空白**——任何修改都要兩邊同步。
 - **驗證點**：Namespace `Use()` middleware，**不是** Gin middleware。原因：Gin 看不到 Socket.IO CONNECT packet 內的 auth payload，且只看得到 polling 階段的 HTTP 握手。
+- **`/admin` 授權政策**：**JWT-only**——任何有效的 HS256 token 都能進。`role` claim 目前**不參與授權**（只是日誌資訊）。若未來要 role-based gating，需重新在 `/admin` 掛 role middleware 並同步 Node 端。
 - **Secret 管理**：`JWT_SECRET` 環境變數；不設則用 `dev-secret-change-me`（Node、Go server、make-token 三邊一致）。
 - **Claims**：自訂結構 `Claims{UserID, Role, RegisteredClaims}`，存在 `socket.Data()`（Go）/ `socket.data.claims`（Node）。
 - **錯誤回傳**：`socket.NewExtendedError("unauthorized", {code:"AUTH_FAILED", reason:"..."})`，client 在 `connect_error` 事件收到。
@@ -157,6 +165,6 @@ Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling �
 8. **新功能流程**：先在 Node server 加事件 → 同步到 Go server → 同步 README 事件表格 → 在 Go client 對應 `On/Emit` → 兩個 server 各跑一次驗證。
 9. **JWT secret 不要 commit**：`JWT_SECRET` 只能用環境變數注入；dev 預設值 `dev-secret-change-me` 已在程式碼中明示「change me」，production 必須覆寫。
 10. **改 JWT 邏輯時兩邊同步**：Node 的 `jwtMiddleware` 與 Go 的 `auth.go` 必須行為等價（token 抽取順序、錯誤碼、claims schema）。檢查表見上方「兩端等價檢查」。
-11. **改 server 行為前先跑 `go test ./...`**：12 個測試覆蓋 auth、事件正確性、並發、大 payload。新增事件時請順手在 `connection_test.go` 補一個對應的測試。
+11. **改 server 行為前先跑 `go test ./...`**：26 個測試覆蓋 auth gate、token 三來源、wrong-alg、事件正確性、`/admin` namespace、並發、大 payload（含 8 MiB 邊界）。新增事件時請順手在 `connection_test.go` 或對應主題的測試檔補一個對應的測試。
 12. **註冊 listener 要趕在 connect 之前**：Engine.IO 的事件（welcome、connect 之後 server 主動 emit 的訊息）可能在 client 端 `connect` 回呼觸發前就送達。測試 helper `dial()` 不等 connect、`mustDial()` 等 connect——大部分情境用 `dial()` 後立刻 `On(...)` 才不會錯過第一個 packet。
 13. **`MaxHttpBufferSize` 已從預設 1 MiB 拉到 8 MiB**（[app.go](server-go/app.go)），這是大 payload 測試的前提；若要再放大需同步調整測試上限與守則此條。

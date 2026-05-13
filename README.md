@@ -49,7 +49,7 @@ npm start
 
 ```powershell
 cd server-go
-go mod tidy        # 第一次需要拉依賴；之後可略過
+go mod download    # 第一次依鎖定版本拉依賴；不會動 go.mod / go.sum
 go run .
 ```
 
@@ -89,7 +89,7 @@ go run ./cmd/make-token -uid alice -role user -ttl 1h
 
 ```powershell
 cd client
-go mod tidy                    # 第一次需要下載依賴
+go mod download                # 第一次依鎖定版本下載依賴；不會動 go.mod / go.sum
 $env:JWT_TOKEN = "<貼上 step 2 的 token>"
 go run .
 ```
@@ -140,13 +140,15 @@ cd server-go
 go test ./... -v
 ```
 
-預期 ~1.2 秒跑完 12 個測試全綠：
+預期 ~1.5 秒跑完 26 個測試全綠：
 
 | 類別 | 檔案 | 測試 |
 |---|---|---|
 | **連線與正確性** | [connection_test.go](server-go/connection_test.go) | `TestConnect_NoToken_Rejected` · `TestConnect_ExpiredToken_Rejected` · `TestConnect_ValidToken_Accepted` · `TestEvent_Welcome_PayloadShape` · `TestEvent_PingAck_RoundTrip` · `TestEvent_ChatBroadcast_BetweenTwoClients` · `TestEvent_RoomScoped_OnlyMembersReceive` |
+| **`/admin` namespace** | [admin_test.go](server-go/admin_test.go) | `TestAdmin_NoToken_Rejected` · `TestAdmin_ValidToken_Accepted_AnyRole` (驗證 JWT-only) · `TestAdmin_Welcome_PayloadShape` · `TestAdmin_OpAck_RoundTrip` |
+| **JWT 進階** | [auth_test.go](server-go/auth_test.go) | `TestAuth_QueryToken_Accepted` · `TestAuth_AuthorizationHeader_Accepted` · `TestAuth_AuthorizationHeader_CaseInsensitiveAndMultiSpace` (6 個 sub-tests) · `TestAuth_AuthBeatsQuery` · `TestAuth_QueryBeatsHeader` · `TestAuth_AlgNone_Rejected` · `TestAuth_AlgRS256_Rejected` · `TestAuth_ManualToken_ParsesAsClaimedAlg` |
 | **多連線壓力** | [stress_test.go](server-go/stress_test.go) | `TestStress_ManyConcurrentConnects` (預設 50 並發) · `TestStress_BroadcastFanout` (20 client 同時收 broadcast) |
-| **大量資料** | [payload_test.go](server-go/payload_test.go) | `TestPayload_LargeAckRoundTrip` (1 MiB 單次 + SHA-256 驗證) · `TestPayload_BurstManyMessages` (500 連續 ack) · `TestPayload_ConcurrentLargePayloads` (5 client × 256 KiB) |
+| **大量資料** | [payload_test.go](server-go/payload_test.go) | `TestPayload_LargeAckRoundTrip` (1 MiB 單次 + SHA-256) · `TestPayload_BurstManyMessages` (500 連續 ack) · `TestPayload_ConcurrentLargePayloads` (5 client × 256 KiB) · `TestPayload_NearMaxBuffer` (8 MiB - 4 KiB) · `TestPayload_OverMaxBuffer` (9 MiB 應被拒) |
 
 ### 加壓跑
 
@@ -231,7 +233,7 @@ sock, err := socket.Connect(serverURL+"admin", opts)
 
 | 症狀 | 處理 |
 |---|---|
-| `go mod tidy` 卡在下載 | 檢查網路、`GOPROXY`；可改用 `GOPROXY=https://proxy.golang.org,direct` |
+| `go mod download` 卡在下載 | 檢查網路、`GOPROXY`；可改用 `$env:GOPROXY="https://proxy.golang.org,direct"`。**不要**用 `go mod tidy` 或 `go get ...@latest` 嘗試「修復」，會破壞版本鎖（見 [CLAUDE.md](CLAUDE.md) 第 7 條） |
 | `connect_error` | 確認 server 已啟動、port 3000 沒被佔用：`netstat -ano \| findstr :3000` |
 | client 卡住沒輸出 | 防火牆可能擋 localhost；或客戶端 transports 設定錯誤 |
 | ack 沒回來 | server handler 必須收 `(payload, ack)` 兩個參數，且只能呼叫 `ack(...)` 一次 |
