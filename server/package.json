@@ -1,0 +1,15 @@
+{
+  "name": "socketio-go-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Socket.IO 4.x server for Go client interop testing",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
