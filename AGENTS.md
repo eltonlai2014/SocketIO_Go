@@ -85,14 +85,21 @@
 #### 3.0.1 Bootstrap 狀態（主人在本機跑完後手動更新此段）
 
 ```
-最後驗證日期：2026-05-13
+最後驗證日期：2026-05-13（Round B+C 測試補完後）
 驗證者：主人（本機 Windows + Go 1.24.1）
 
 cd server-go && go build ./...      → ✅ exit 0
 cd server-go && go vet ./...        → ✅ exit 0
-cd server-go && go test ./... -count=1 -timeout 120s
-                                    → ✅ ok  socketio-go-server  1.994s
+cd server-go && go test ./... -count=1 -timeout 180s
+                                    → ✅ ok  socketio-go-server  1.484s
                                        ?  socketio-go-server/cmd/make-token  [no test files]
+                                    → 26 tests pass:
+                                       - 4 TestAdmin_*   (admin namespace, JWT-only)
+                                       - 8 TestAuth_*    (token sources, Bearer parser, wrong alg)
+                                       - 3 TestConnect_* (auth gate)
+                                       - 4 TestEvent_*   (welcome/ping/chat/room)
+                                       - 5 TestPayload_* (incl. 8 MiB boundary)
+                                       - 2 TestStress_*  (concurrent + broadcast fanout)
 cd client && go build ./...         → ✅ exit 0
 cd server && node -c index.js       → ✅ exit 0
 
