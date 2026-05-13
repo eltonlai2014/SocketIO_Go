@@ -6,14 +6,19 @@
 
 ## 1. Codex 在這個 repo 的角色
 
-- **角色**：靜態審查者（reviewer），**只讀不寫程式碼**。
+- **角色**：**純靜態審查者（static reviewer）**。讀檔、比對、寫 finding，不執行 build / test / module tooling。
 - **唯一可寫的檔案**：`review-report.md`（放在 repo root，每次 review 覆寫）。
 - **禁止行為**：
   - 不要修改 `server/`、`server-go/`、`client/` 下任何 `.go` / `.js` / `package.json` / `go.mod` / `go.sum`。
-  - 不要執行 `go mod tidy`、`npm install`、`npm update`、`go get -u`、`go get <package>`——版本鎖在這個專案是**正確性條件**，見 `CLAUDE.md` 開發守則第 7 條。`go mod download`（純粹下載已鎖定的依賴到 module cache，不會動 go.mod / go.sum）是**允許**的，用來預熱沙箱環境。
-  - 不要 `git push --force` / 不要推到 `main`。允許 `git add review-report.md && git commit && git push` 把 review 結果推回當前的 review branch（事實上 Codex sandbox 工作流就是這樣 checkpoint）。**只能** commit `review-report.md`；任何其他檔案的 commit 屬禁止行為。
+  - **不要執行任何 Go toolchain 命令**：`go build`、`go vet`、`go test`、`go mod tidy`、`go mod download`、`go get` 全部禁止。理由：Codex 沙箱的 go.sum 與 module cache 狀態與 repo 不符，前三輪 review 都因此產生 6/6/4 條 false-positive Critical findings。Phase 0 由主人在本機跑（見 §3.0）。
+  - 不要執行 `npm install` / `npm update` / `npm test`。可接受 `node -c <file>` 純語法檢查。
+  - 不要 `git push --force` / 不要推到 `main`。允許 `git add review-report.md && git commit && git push` 把 review 結果推回當前的 review branch。**只能** commit `review-report.md`；任何其他檔案的 commit 屬禁止行為。
   - 不要建立任何其他文件檔（除非主人明確指示）。
-- **允許的執行動作**：`go build ./...`、`go vet ./...`、`go test ./...`、`go mod download`、`golangci-lint run`（如可用）、`node -c server/index.js`、唯讀的 `git log` / `git diff` / `git grep`。
+- **允許的執行動作**：
+  - `node -c <file>` 純語法檢查（不執行）
+  - 唯讀的 `git log` / `git diff` / `git grep` / `git show`
+  - 唯讀的檔案系統操作：`cat` / `head` / `tail` / `grep` / `find` / `wc`
+  - `golangci-lint run`（如沙箱已裝且不需網路；若不可用就跳過，不算 finding）
 
 ---
 
@@ -51,6 +56,7 @@
 |---|---|---|---|
 | `MaxHttpBufferSize` | 預設（1 MiB） | 8 MiB（[server-go/app.go:25](server-go/app.go#L25)） | `CLAUDE.md` 第 13 條：Go server 需要 8 MiB 才能跑 [payload_test.go](server-go/payload_test.go)；Node 那邊沒有對應測試所以維持預設。Production 要對齊時必須兩邊一起改。 |
 | `welcome.message` 字面 | `"hello from socket.io 4.x server"` | `"hello from go-gin socket.io 4.x server"` | 故意 differentiate，方便 demo 時辨認 client 打到哪一邊。Schema（`{message,id,ts}`）必須等價，字面允許不同。 |
+| CORS preflight 設定 | `cors:{origin:"*"}` ([server/index.js:8](server/index.js#L8)) | 無 ([server-go/app.go:30](server-go/app.go#L30)) | 本專案只用 **Go client** 對接，沒有瀏覽器端使用情境。Go server 不需 CORS preflight；Node server 留 `*` 是 socket.io 預設樣板。要改 production 時，瀏覽器端進來才需補 Go 端 CORS。 |
 | `dial()` 不等 connect | n/a | [server-go/setup_test.go](server-go/setup_test.go) | `CLAUDE.md` 第 12 條：listener 必須在 `connect` 回呼前註冊，所以 helper 故意不等。要在 finding 裡標這條的話，應該標**沒有對齊的測試**，而不是 helper 本身。 |
 | Dev secret fallback | 兩邊都 silent fallback | 同左 | demo 專案；想加 production warning 是「建議改善」（Medium），不是「不等價」(High)。 |
 
@@ -60,50 +66,46 @@
 
 ## 3. Review 流程：5 個 Phase
 
-每個 Phase 結束都把 finding 寫進 `review-report.md` 對應段落。**順序不可跳**，因為後面的 phase 依賴前面已建立的事實。
+每個 Phase 結束都把 finding 寫進 `review-report.md` 對應段落。**從 Phase 1 開始執行**——Phase 0 由主人在本機跑後提供結果，Codex 不執行。
 
-### Phase 0 — Bootstrap（驗證可建置可測試）
+### Phase 0 — Bootstrap（**Codex 不執行**，由主人提供結果）
 
-```bash
-# 在 repo root
-# 先預熱依賴 cache（沙箱環境必要，本機跑通常已 cache 過可省略）
-cd server-go && go mod download && cd ..
-cd client    && go mod download && cd ..
+**為什麼這樣設計**：前三輪 review 都產生 false-positive Critical findings：
 
-cd server-go && go build ./... && go vet ./... && go test ./... -count=1 -timeout 120s
-cd ../client  && go build ./...
-cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
+| 輪次 | Codex Critical 數 | 真相 |
+|---|---|---|
+| 1 | 6 條 | 沙箱無網路 + go module cache 空 → Go toolchain 報 "missing go.sum entry" → Codex 全部標 Critical |
+| 2 | 6 條 | 同上，加 grep verification 也誤判 |
+| 3 | 4 條 | **沙箱的 `go.sum` 比 repo 短了 ~20 行**（行號對不上），grep 找不到實際存在的 h1 entry |
+
+根本原因：Codex 沙箱與 repo 的 `go.sum` 不一致 + 沒有網路下載 module zip。靠 AGENTS.md 寫規則沒法解決底層環境問題。
+
+**新做法**：Codex 在 Phase 0 段落只做一件事——**複製主人提供的 bootstrap 結果**到 report，**不執行任何 Go toolchain 命令**。主人提供結果的位置：本檔案 §3.0.1。
+
+#### 3.0.1 Bootstrap 狀態（主人在本機跑完後手動更新此段）
+
+```
+最後驗證日期：2026-05-13
+驗證者：主人（本機 Windows + Go 1.24.1）
+
+cd server-go && go build ./...      → ✅ exit 0
+cd server-go && go vet ./...        → ✅ exit 0
+cd server-go && go test ./... -count=1 -timeout 120s
+                                    → ✅ ok  socketio-go-server  1.994s
+                                       ?  socketio-go-server/cmd/make-token  [no test files]
+cd client && go build ./...         → ✅ exit 0
+cd server && node -c index.js       → ✅ exit 0
+
+go.sum integrity:
+  server-go/go.sum: 136 lines, all required h1 + /go.mod h1 pairs verified
+  client/go.sum:    62 lines, all required h1 + /go.mod h1 pairs verified
 ```
 
-**通過條件**：
-- `go test ./...` 12 個測試全綠（如果有名稱不同，以實際輸出為準）。
-- `go vet` 無警告。
-- `node -c` 無語法錯誤。
+> Codex 在 review report 的 Phase 0 段落請**完整複製貼上**這段（含日期），表示「主人本機 bootstrap 是綠的」。若日期早於 7 天前，請在 report 加註「bootstrap 狀態可能過時，建議主人重跑後更新 §3.0.1」。
 
-**若失敗，先做以下「環境性失敗」排除**（很重要，否則容易誤判）：
+#### 3.0.2 Codex 看到 Go toolchain 錯誤怎麼辦
 
-1. **錯誤訊息為 `missing go.sum entry for module ...`**：
-   每個 module 在 go.sum 應該有**兩行**，長相完全不同，**必須兩個都查到**：
-   ```
-   <module> <version> h1:<base64>=        ← zip 內容 (module-content) h1
-   <module> <version>/go.mod h1:<base64>= ← go.mod 檔案 h1
-   ```
-   驗證指令（兩個都跑，缺一不可）：
-   ```bash
-   grep -nE '^<module> <version> h1:'        server-go/go.sum client/go.sum
-   grep -nE '^<module> <version>/go.mod h1:' server-go/go.sum client/go.sum
-   ```
-   - 若**兩個 grep 都命中** → 這是 **environment limitation**（沙箱 module cache 為空 + 無網路下載），**不是 finding**。在 report Phase 0 標註「environment-limited bootstrap」並**繼續往 Phase 1**（後續 phase 多為靜態審查，不需執行 build）。
-   - 若**只命中一個或都沒命中** → 才是 Critical finding，照常記錄並貼上實際 grep 輸出（不可只貼 Go toolchain 錯誤訊息）。
-   - ⚠️ 已知陷阱：前兩輪 Codex 都把「沙箱拿不到 module zip」誤判成「zip h1 缺漏」。`go.sum` 兩行齊全的情況下，**Go toolchain 的錯誤訊息會誤導**——務必以 `grep` 結果為準，不要僅憑訊息字串下結論。
-
-2. **錯誤訊息含 `Access is denied` / `permission denied` / 路徑為 `AppData\Local\go-build`**：沙箱對 Go cache 無寫權，屬 environment limitation，處理方式同上。
-
-3. **`dial tcp: ... timeout` / `proxy.golang.org: no such host`**：沙箱無對外網路，屬 environment limitation。
-
-**只有「非環境性」失敗才寫成 finding 並停下**：例如真的 `*.go` 編譯錯誤、`go vet` 報出實際問題、`go test` 跑起來但測試 fail。這些才代表 repo 有問題。
-
-> **Phase 0 寬鬆原則**：本專案 Codex review 的價值在 Phase 1–5（對等性、安全、並發、測試、文件）的**靜態審查**，這些都可以離線只讀檔案完成。Phase 0 只是錦上添花，不該因環境問題擋住整個 review。
+如果 Codex 因為某些自動行為（如插件預設）真的執行了 `go build` 並看到錯誤：**忽略**。不寫進 report，不影響 verdict。理由：你看到的錯誤幾乎肯定是沙箱環境問題，不是 repo 問題。
 
 ---
 
@@ -185,11 +187,16 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 
 - [ ] `CLAUDE.md` 第 1-13 條守則是否每一條都在程式碼中可驗證？任何一條過時的→列出來。
 - [ ] `CLAUDE.md` 事件表是否與實際程式碼一致（event name、payload、方向）？
-- [ ] `README` 不存在——是否應該建議建立？（**不要自己建**，只在 report 裡建議）
+- [ ] `README.md` 內容是否與實際程式碼一致？特別檢查 `go mod` 相關指令是否符合鎖版策略（不可推薦 `go mod tidy` / `go get @latest` / `go get -u`）。
 
 ---
 
 ## 4. Review Report 格式（寫到 `review-report.md`）
+
+**Verdict 規則**（重要）：Verdict **只**依 Phase 1～5 的 finding 嚴重度決定，與 Phase 0 無關。
+- 任一 🔴 Critical（Phase 1～5）→ ❌ Block
+- 有 🟠 High 但無 Critical → ⚠️ Ship with notes
+- 只有 🟡 Medium / 🔵 Low 或全綠 → ✅ Ship
 
 ```markdown
 # SocketIO_Go Code Review — <YYYY-MM-DD>
@@ -199,9 +206,7 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 > Verdict: ✅ Ship / ⚠️ Ship with notes / ❌ Block
 
 ## Phase 0 — Bootstrap
-- Build: ✅/❌
-- Tests: <N>/12 passing
-- Vet: clean / <issues>
+（複製 AGENTS.md §3.0.1 內容，含日期。Codex 不執行 Go toolchain。）
 
 ## Phase 1 — 對等性
 | 項目 | Node | Go | 狀態 |
@@ -234,7 +239,7 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 
 1. Codex 寫完 `review-report.md` 就停。
 2. 主人會把 report 丟給 Claude，Claude 依 finding 在本機修補並跑 `go test ./...`。
-3. 修完後，主人會請 Codex 重跑「**只跑 Phase 0 + 對應的修補項所屬 Phase**」做 verification round。
+3. 修完後，主人會請 Codex 重跑「**對應修補項所屬 Phase**」做 verification round。Phase 0 由主人本機重跑，更新 §3.0.1 後 Codex 才開始下一輪。
 4. Codex 不主動跨輪做事；每一輪都從讀 `review-report.md` 上一輪結尾的「建議下一步」開始，做完寫進新的 report，覆寫舊檔。
 
 ---
@@ -242,13 +247,15 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 ## 6. 不要做的事（速查）
 
 - ❌ 改任何 `.go` / `.js` / `package.json` / `go.mod` / `go.sum`
-- ❌ `go mod tidy` / `npm install` / `go get -u` / `go get <pkg>`（`go mod download` 允許）
+- ❌ **任何 Go toolchain 命令**：`go build` / `go vet` / `go test` / `go mod tidy` / `go mod download` / `go get` 一律禁止；Phase 0 由主人提供結果
+- ❌ `npm install` / `npm update` / `npm test`（`node -c` 純語法檢查可）
 - ❌ 建議升級 `gin` / `quic-go` / `qpack`（鎖版有原因，見 `CLAUDE.md` 第 7 條）
 - ❌ 建議把 `googollee/go-socket.io` 換成 v3 protocol stack
 - ❌ `git push --force` / 推到 `main`（推到 review branch 並 commit `review-report.md` 是 OK 的）
 - ❌ commit 任何**非** `review-report.md` 的檔案
 - ❌ 建立 README / 任何文件檔（report 以外）
-- ❌ 把「環境性失敗」（go.sum 看似缺項但實際 grep 得到、cache 權限被拒、網路 timeout）寫成 Critical finding——這是誤判，見 Phase 0 排除規則
+- ❌ 把 §2.5 已知豁免列表中的項目寫成 finding
+- ❌ 把 `go.sum` 相關訊息（無論 grep 找得到或找不到）寫成 finding——這個專案的 `go.sum` 由主人於 §3.0.1 verify，Codex 不再二次審查
 - ❌ 在 production 路徑使用 `dev-secret-change-me`
 - ❌ 把 socket.io 路徑放進 gzip middleware
 
