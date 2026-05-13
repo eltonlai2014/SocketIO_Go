@@ -1,0 +1,11 @@
+# Build artifacts (go build outputs these next to main.go on Windows)
+*.exe
+
+# Claude Code local-only settings (per-user permission rules etc.)
+.claude/settings.local.json
+
+# Node
+server/node_modules/
+
+# Go module cache / build cache shouldn't ever land here, but guard anyway
+**/go-build/
