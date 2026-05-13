@@ -66,7 +66,7 @@ npm start
 
 ```powershell
 cd client
-go mod tidy        # 第一次需要拉取依賴
+go mod download    # 第一次依鎖定版本拉取依賴；不會修改 go.mod / go.sum
 go run .
 ```
 
@@ -98,13 +98,19 @@ Go 端切換 namespace：把 `manager.Socket("/", nil)` 改成 `manager.Socket("
 
 ## 常見問題
 
-### Q1：`go mod tidy` 失敗或找不到套件
+### Q1：依賴下載失敗 / 找不到套件
 注意 import 路徑沒有 `/v3` 字尾（v1.x 上仍以 `github.com/zishang520/socket.io-client-go/socket` 為準），且需要 Go ≥ 1.24.1。
+
+**正確修法**：先確認 `go.sum` 與 `go.mod` 已有鎖定版本（這個 repo 提交時就是齊全的），然後跑：
 ```powershell
-go get github.com/zishang520/socket.io-client-go@latest
-go get github.com/zishang520/engine.io-client-go@latest
-go get github.com/zishang520/engine.io/v2@latest
+go mod download
 ```
+這只會依 `go.sum` 把鎖定版本拉到 module cache，**不會**改 `go.mod` / `go.sum`。
+
+**禁忌**（任一條都會破壞版本鎖、引發守則第 7 條的編譯衝突）：
+- ❌ `go mod tidy`（會自動升級可升的 indirect deps）
+- ❌ `go get <package>@latest`（會把 `quic-go` / `qpack` / `gin` 升過上限）
+- ❌ `go get -u`（升級所有依賴）
 
 ### Q2：客戶端連不上、卡在 polling
 Socket.IO 4.x 預設 `transports: ['polling', 'websocket']`，先 long-polling 再 upgrade 到 WS。確認：

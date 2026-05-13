@@ -49,7 +49,7 @@ npm start
 
 ```powershell
 cd server-go
-go mod tidy        # 第一次需要拉依賴；之後可略過
+go mod download    # 第一次依鎖定版本拉依賴；不會動 go.mod / go.sum
 go run .
 ```
 
@@ -89,7 +89,7 @@ go run ./cmd/make-token -uid alice -role user -ttl 1h
 
 ```powershell
 cd client
-go mod tidy                    # 第一次需要下載依賴
+go mod download                # 第一次依鎖定版本下載依賴；不會動 go.mod / go.sum
 $env:JWT_TOKEN = "<貼上 step 2 的 token>"
 go run .
 ```
@@ -231,7 +231,7 @@ sock, err := socket.Connect(serverURL+"admin", opts)
 
 | 症狀 | 處理 |
 |---|---|
-| `go mod tidy` 卡在下載 | 檢查網路、`GOPROXY`；可改用 `GOPROXY=https://proxy.golang.org,direct` |
+| `go mod download` 卡在下載 | 檢查網路、`GOPROXY`；可改用 `$env:GOPROXY="https://proxy.golang.org,direct"`。**不要**用 `go mod tidy` 或 `go get ...@latest` 嘗試「修復」，會破壞版本鎖（見 [CLAUDE.md](CLAUDE.md) 第 7 條） |
 | `connect_error` | 確認 server 已啟動、port 3000 沒被佔用：`netstat -ano \| findstr :3000` |
 | client 卡住沒輸出 | 防火牆可能擋 localhost；或客戶端 transports 設定錯誤 |
 | ack 沒回來 | server handler 必須收 `(payload, ack)` 兩個參數，且只能呼叫 `ack(...)` 一次 |

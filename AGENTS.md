@@ -43,6 +43,21 @@
 
 ---
 
+## 2.5 已知豁免（intentional divergences；不要列為 finding）
+
+下列「Node ↔ Go 不等價」是**設計上故意保留**的差異，**不要**寫進 Phase 1 對等性 finding（可以在表格列為 ⚪ intentional，但不能標 ❌/⚠️ severity）：
+
+| 項目 | Node | Go | 為什麼故意 |
+|---|---|---|---|
+| `MaxHttpBufferSize` | 預設（1 MiB） | 8 MiB（[server-go/app.go:25](server-go/app.go#L25)） | `CLAUDE.md` 第 13 條：Go server 需要 8 MiB 才能跑 [payload_test.go](server-go/payload_test.go)；Node 那邊沒有對應測試所以維持預設。Production 要對齊時必須兩邊一起改。 |
+| `welcome.message` 字面 | `"hello from socket.io 4.x server"` | `"hello from go-gin socket.io 4.x server"` | 故意 differentiate，方便 demo 時辨認 client 打到哪一邊。Schema（`{message,id,ts}`）必須等價，字面允許不同。 |
+| `dial()` 不等 connect | n/a | [server-go/setup_test.go](server-go/setup_test.go) | `CLAUDE.md` 第 12 條：listener 必須在 `connect` 回呼前註冊，所以 helper 故意不等。要在 finding 裡標這條的話，應該標**沒有對齊的測試**，而不是 helper 本身。 |
+| Dev secret fallback | 兩邊都 silent fallback | 同左 | demo 專案；想加 production warning 是「建議改善」（Medium），不是「不等價」(High)。 |
+
+**若發現新的故意豁免**：請在 review 結尾把它加入「建議下一步」，由主人決定是否把該豁免加入這張表。Codex 不要自行擴張這張表。
+
+---
+
 ## 3. Review 流程：5 個 Phase
 
 每個 Phase 結束都把 finding 寫進 `review-report.md` 對應段落。**順序不可跳**，因為後面的 phase 依賴前面已建立的事實。
@@ -68,9 +83,19 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 **若失敗，先做以下「環境性失敗」排除**（很重要，否則容易誤判）：
 
 1. **錯誤訊息為 `missing go.sum entry for module ...`**：
-   先用 `grep '<module>' server-go/go.sum client/go.sum` 確認該 entry 是否真的不在 go.sum。
-   - 若 grep **有找到**對應的 `h1:` 與 `/go.mod` 兩行 → 這是 **environment limitation**（沙箱 module cache 為空 + 無網路下載），**不是 finding**。在 report Phase 0 標註「environment-limited bootstrap」並**繼續往 Phase 1**（後續 phase 多為靜態審查，不需執行 build）。
-   - 若 grep **真的找不到** → 才是 Critical finding，照常記錄。
+   每個 module 在 go.sum 應該有**兩行**，長相完全不同，**必須兩個都查到**：
+   ```
+   <module> <version> h1:<base64>=        ← zip 內容 (module-content) h1
+   <module> <version>/go.mod h1:<base64>= ← go.mod 檔案 h1
+   ```
+   驗證指令（兩個都跑，缺一不可）：
+   ```bash
+   grep -nE '^<module> <version> h1:'        server-go/go.sum client/go.sum
+   grep -nE '^<module> <version>/go.mod h1:' server-go/go.sum client/go.sum
+   ```
+   - 若**兩個 grep 都命中** → 這是 **environment limitation**（沙箱 module cache 為空 + 無網路下載），**不是 finding**。在 report Phase 0 標註「environment-limited bootstrap」並**繼續往 Phase 1**（後續 phase 多為靜態審查，不需執行 build）。
+   - 若**只命中一個或都沒命中** → 才是 Critical finding，照常記錄並貼上實際 grep 輸出（不可只貼 Go toolchain 錯誤訊息）。
+   - ⚠️ 已知陷阱：前兩輪 Codex 都把「沙箱拿不到 module zip」誤判成「zip h1 缺漏」。`go.sum` 兩行齊全的情況下，**Go toolchain 的錯誤訊息會誤導**——務必以 `grep` 結果為準，不要僅憑訊息字串下結論。
 
 2. **錯誤訊息含 `Access is denied` / `permission denied` / 路徑為 `AppData\Local\go-build`**：沙箱對 Go cache 無寫權，屬 environment limitation，處理方式同上。
 
