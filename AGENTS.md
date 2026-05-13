@@ -10,10 +10,10 @@
 - **唯一可寫的檔案**：`review-report.md`（放在 repo root，每次 review 覆寫）。
 - **禁止行為**：
   - 不要修改 `server/`、`server-go/`、`client/` 下任何 `.go` / `.js` / `package.json` / `go.mod` / `go.sum`。
-  - 不要執行 `go mod tidy`、`npm install`、`npm update`、`go get -u`——版本鎖在這個專案是**正確性條件**，見 `CLAUDE.md` 開發守則第 7 條。
-  - 不要 `git commit` / `git push` / 開 PR。發現問題 → 寫進 `review-report.md` 並結束。
+  - 不要執行 `go mod tidy`、`npm install`、`npm update`、`go get -u`、`go get <package>`——版本鎖在這個專案是**正確性條件**，見 `CLAUDE.md` 開發守則第 7 條。`go mod download`（純粹下載已鎖定的依賴到 module cache，不會動 go.mod / go.sum）是**允許**的，用來預熱沙箱環境。
+  - 不要 `git push --force` / 不要推到 `main`。允許 `git add review-report.md && git commit && git push` 把 review 結果推回當前的 review branch（事實上 Codex sandbox 工作流就是這樣 checkpoint）。**只能** commit `review-report.md`；任何其他檔案的 commit 屬禁止行為。
   - 不要建立任何其他文件檔（除非主人明確指示）。
-- **允許的執行動作**：`go build ./...`、`go vet ./...`、`go test ./...`、`golangci-lint run`（如可用）、`node -c server/index.js`、唯讀的 `git log` / `git diff`。
+- **允許的執行動作**：`go build ./...`、`go vet ./...`、`go test ./...`、`go mod download`、`golangci-lint run`（如可用）、`node -c server/index.js`、唯讀的 `git log` / `git diff` / `git grep`。
 
 ---
 
@@ -51,6 +51,10 @@
 
 ```bash
 # 在 repo root
+# 先預熱依賴 cache（沙箱環境必要，本機跑通常已 cache 過可省略）
+cd server-go && go mod download && cd ..
+cd client    && go mod download && cd ..
+
 cd server-go && go build ./... && go vet ./... && go test ./... -count=1 -timeout 120s
 cd ../client  && go build ./...
 cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
@@ -61,7 +65,20 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 - `go vet` 無警告。
 - `node -c` 無語法錯誤。
 
-**若失敗**：立刻在 `review-report.md` 寫下完整輸出，並停止後續 phase（基礎壞了，後面的審查不可信）。
+**若失敗，先做以下「環境性失敗」排除**（很重要，否則容易誤判）：
+
+1. **錯誤訊息為 `missing go.sum entry for module ...`**：
+   先用 `grep '<module>' server-go/go.sum client/go.sum` 確認該 entry 是否真的不在 go.sum。
+   - 若 grep **有找到**對應的 `h1:` 與 `/go.mod` 兩行 → 這是 **environment limitation**（沙箱 module cache 為空 + 無網路下載），**不是 finding**。在 report Phase 0 標註「environment-limited bootstrap」並**繼續往 Phase 1**（後續 phase 多為靜態審查，不需執行 build）。
+   - 若 grep **真的找不到** → 才是 Critical finding，照常記錄。
+
+2. **錯誤訊息含 `Access is denied` / `permission denied` / 路徑為 `AppData\Local\go-build`**：沙箱對 Go cache 無寫權，屬 environment limitation，處理方式同上。
+
+3. **`dial tcp: ... timeout` / `proxy.golang.org: no such host`**：沙箱無對外網路，屬 environment limitation。
+
+**只有「非環境性」失敗才寫成 finding 並停下**：例如真的 `*.go` 編譯錯誤、`go vet` 報出實際問題、`go test` 跑起來但測試 fail。這些才代表 repo 有問題。
+
+> **Phase 0 寬鬆原則**：本專案 Codex review 的價值在 Phase 1–5（對等性、安全、並發、測試、文件）的**靜態審查**，這些都可以離線只讀檔案完成。Phase 0 只是錦上添花，不該因環境問題擋住整個 review。
 
 ---
 
@@ -200,11 +217,13 @@ cd ../server  && node -c index.js   # 不需 npm install，只做語法檢查
 ## 6. 不要做的事（速查）
 
 - ❌ 改任何 `.go` / `.js` / `package.json` / `go.mod` / `go.sum`
-- ❌ `go mod tidy` / `npm install` / `go get -u`
+- ❌ `go mod tidy` / `npm install` / `go get -u` / `go get <pkg>`（`go mod download` 允許）
 - ❌ 建議升級 `gin` / `quic-go` / `qpack`（鎖版有原因，見 `CLAUDE.md` 第 7 條）
 - ❌ 建議把 `googollee/go-socket.io` 換成 v3 protocol stack
-- ❌ `git commit` / `git push` / `gh pr ...`
+- ❌ `git push --force` / 推到 `main`（推到 review branch 並 commit `review-report.md` 是 OK 的）
+- ❌ commit 任何**非** `review-report.md` 的檔案
 - ❌ 建立 README / 任何文件檔（report 以外）
+- ❌ 把「環境性失敗」（go.sum 看似缺項但實際 grep 得到、cache 權限被拒、網路 timeout）寫成 Critical finding——這是誤判，見 Phase 0 排除規則
 - ❌ 在 production 路徑使用 `dev-secret-change-me`
 - ❌ 把 socket.io 路徑放進 gzip middleware
 
